@@ -1,3 +1,4 @@
+
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
@@ -10,66 +11,71 @@ function Login() {
   });
 
   const [error, setError] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [loading, setLoading] = useState(false);
 
   const handleChange = (e) => {
     const { name, value } = e.target;
 
-    setFormData({
-      ...formData,
+    setFormData((previous) => ({
+      ...previous,
       [name]: value,
-    });
+    }));
 
     setError("");
   };
 
-  
-const handleSubmit = async (e) => {
-  e.preventDefault();
-  setError("");
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError("");
 
-  if (!formData.email.trim() || !formData.password) {
-    setError("Please enter your email and password.");
-    return;
-  }
+    if (!formData.email.trim() || !formData.password) {
+      setError("Please enter your email and password.");
+      return;
+    }
 
-  try {
-    const response = await fetch(`${import.meta.env.VITE_API_URL}/api/auth/login`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        email: formData.email.trim(),
-        password: formData.password,
-      }),
-    });
+    setLoading(true);
 
-    const data = await response.json();
+    try {
+      const response = await fetch(
+        `${import.meta.env.VITE_API_URL}/api/auth/login`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            email: formData.email.trim(),
+            password: formData.password,
+          }),
+        }
+      );
 
-    
-if (!response.ok) {
-  setError(data.message || "Login failed. Please try again.");
-  return;
-}
+      const data = await response.json();
 
-localStorage.setItem("pawfectToken", data.token);
-localStorage.setItem("pawfectUser", JSON.stringify(data.user));
+      if (!response.ok) {
+        setError(data.message || "Login failed. Please try again.");
+        return;
+      }
 
-navigate("/pets", {
-  state: { user: data.user, message: data.message },
-});
+      localStorage.setItem("pawfectToken", data.token);
+      localStorage.setItem("pawfectUser", JSON.stringify(data.user));
 
-  } catch (error) {
-    setError(
-      "Cannot connect to the server. Please make sure the backend is running."
-    );
-  }
-};
+      navigate("/pets", {
+        state: { user: data.user, message: data.message },
+      });
+    } catch {
+      setError(
+        "Cannot connect to the server. Please make sure the backend is running."
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <div className="auth-page">
       <div className="auth-container">
-
         <div className="auth-image">
           <img
             src="https://images.unsplash.com/photo-1548199973-03cce0bbc87b?auto=format&fit=crop&w=1000&q=80"
@@ -94,14 +100,11 @@ navigate("/pets", {
 
         <div className="auth-form-container">
           <div className="auth-form">
-
             <Link to="/" className="auth-logo">
               🐾 Pawfect Home
             </Link>
 
-            <span className="section-label">
-              WELCOME BACK
-            </span>
+            <span className="section-label">WELCOME BACK</span>
 
             <h1>Sign in to Pawfect Home</h1>
 
@@ -110,14 +113,9 @@ navigate("/pets", {
               with shelters.
             </p>
 
-            {error && (
-              <div className="form-error">
-                {error}
-              </div>
-            )}
+            {error && <div className="form-error">{error}</div>}
 
             <form onSubmit={handleSubmit}>
-
               <div className="form-group">
                 <label>Email Address</label>
 
@@ -127,6 +125,7 @@ navigate("/pets", {
                   value={formData.email}
                   onChange={handleChange}
                   placeholder="Enter your email"
+                  autoComplete="email"
                   required
                 />
               </div>
@@ -138,26 +137,42 @@ navigate("/pets", {
                   <button
                     type="button"
                     className="forgot-btn"
+                    onClick={() =>
+                      setError("Password reset is not available yet.")
+                    }
                   >
                     Forgot password?
                   </button>
                 </div>
 
-                <input
-                  type="password"
-                  name="password"
-                  value={formData.password}
-                  onChange={handleChange}
-                  placeholder="Enter your password"
-                  required
-                />
+                <div className="password-input-wrapper">
+                  <input
+                    type={showPassword ? "text" : "password"}
+                    name="password"
+                    value={formData.password}
+                    onChange={handleChange}
+                    placeholder="Enter your password"
+                    autoComplete="current-password"
+                    required
+                  />
+
+                  <button
+                    type="button"
+                    className="password-toggle"
+                    onClick={() => setShowPassword((value) => !value)}
+                    aria-label={showPassword ? "Hide password" : "Show password"}
+                  >
+                    {showPassword ? "Hide" : "Show"}
+                  </button>
+                </div>
               </div>
 
               <button
                 type="submit"
                 className="submit-btn"
+                disabled={loading}
               >
-                Sign In
+                {loading ? "Signing in..." : "Sign In"}
               </button>
             </form>
 
@@ -167,11 +182,8 @@ navigate("/pets", {
 
             <p className="auth-switch">
               Don't have an account?{" "}
-              <Link to="/register">
-                Create an account
-              </Link>
+              <Link to="/register">Create an account</Link>
             </p>
-
           </div>
         </div>
       </div>
