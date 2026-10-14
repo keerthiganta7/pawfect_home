@@ -211,11 +211,7 @@ function MyAccount() {
 
             <div className="form-group">
               <label>Email Address</label>
-              <input
-                type="email"
-                value={user.email}
-                readOnly
-              />
+              <input type="email" value={user.email} readOnly />
             </div>
 
             <div className="form-group">

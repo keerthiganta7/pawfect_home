@@ -49,7 +49,7 @@ function Adopt() {
   e.preventDefault();
 
   try {
-    const response = await fetch(`${import.meta.env.VITE_API_URL}/api/adoptions`, 
+    const response = await fetch(`${import.meta.env.VITE_API_URL}/api/adoptions`,
       {
         method: "POST",
         headers: {
