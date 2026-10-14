@@ -270,7 +270,7 @@ function About() {
             <p>
               <strong>Email</strong>
               <br />
-              pawfect247@gmail.com
+              pawfecthome247@gmail.com
             </p>
             <p>
               <strong>Address</strong>
