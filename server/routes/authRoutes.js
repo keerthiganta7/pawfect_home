@@ -4,6 +4,7 @@ const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 const User = require("../models/User");
 const EmailOTP = require("../models/EmailOTP");
+const PasswordReset = require("../models/PasswordReset");
 const jwt = require("jsonwebtoken");
 const rateLimit = require("express-rate-limit");
 
@@ -30,7 +31,7 @@ const validPassword = (password) =>
   /\d/.test(password) &&
   /[^A-Za-z0-9]/.test(password);
 
-const sendOTPEmail = async (email, fullName, otp) => {
+const sendOTPEmail = async (email, fullName, otp, isReset = false) => {
   if (!process.env.BREVO_API_KEY) {
     throw new Error("Brevo API key is not configured.");
   }
@@ -38,7 +39,7 @@ const sendOTPEmail = async (email, fullName, otp) => {
   const response = await fetch("https://api.brevo.com/v3/smtp/email", {
     method: "POST",
     headers: {
-      "accept": "application/json",
+      accept: "application/json",
       "api-key": process.env.BREVO_API_KEY,
       "content-type": "application/json",
     },
@@ -48,9 +49,15 @@ const sendOTPEmail = async (email, fullName, otp) => {
         email: "pawfecthome247@gmail.com",
       },
       to: [{ email, name: fullName }],
-      subject: "Verify your Pawfect Home email",
-      textContent: `Hello ${fullName}, your Pawfect Home verification code is ${otp}. It expires in 5 minutes. Do not share this code with anyone.`,
-      htmlContent: `<p>Hello ${fullName},</p><p>Your Pawfect Home verification code is:</p><h2>${otp}</h2><p>This code expires in 5 minutes. Do not share it with anyone.</p>`,
+      subject: isReset
+        ? "Reset your Pawfect Home password"
+        : "Verify your Pawfect Home email",
+      textContent: isReset
+        ? `Hello ${fullName}, your password reset code is ${otp}. It expires in 5 minutes. If you did not request this, ignore this email.`
+        : `Hello ${fullName}, your Pawfect Home verification code is ${otp}. It expires in 5 minutes. Do not share this code with anyone.`,
+      htmlContent: isReset
+        ? `<p>Hello ${fullName},</p><p>Your password reset code is:</p><h2>${otp}</h2><p>This code expires in 5 minutes. If you did not request this, ignore this email.</p>`
+        : `<p>Hello ${fullName},</p><p>Your Pawfect Home verification code is:</p><h2>${otp}</h2><p>This code expires in 5 minutes. Do not share it with anyone.</p>`,
     }),
   });
 
@@ -61,19 +68,12 @@ const sendOTPEmail = async (email, fullName, otp) => {
   }
 };
 
-// REGISTER: Send OTP without creating the account
+// REGISTER
 router.post("/register", otpLimiter, async (req, res) => {
-  let normalizedEmail;
-
   try {
     const { fullName, email, phone, password } = req.body;
 
-    if (
-      !fullName?.trim() ||
-      !email?.trim() ||
-      !phone ||
-      !password
-    ) {
+    if (!fullName?.trim() || !email?.trim() || !phone || !password) {
       return res.status(400).json({
         message: "Please fill in all required fields.",
       });
@@ -92,13 +92,9 @@ router.post("/register", otpLimiter, async (req, res) => {
       });
     }
 
-    normalizedEmail = email.trim().toLowerCase();
+    const normalizedEmail = email.trim().toLowerCase();
 
-    const existingUser = await User.findOne({
-      email: normalizedEmail,
-    });
-
-    if (existingUser) {
+    if (await User.findOne({ email: normalizedEmail })) {
       return res.status(409).json({
         message: "An account with this email already exists. Please log in.",
       });
@@ -107,20 +103,18 @@ router.post("/register", otpLimiter, async (req, res) => {
     const otp = generateOTP();
     const now = new Date();
 
-    const pendingData = {
-      fullName: fullName.trim(),
-      phone,
-      passwordHash: await bcrypt.hash(password, 10),
-      otpHash: hashOTP(otp),
-      expiresAt: new Date(now.getTime() + 5 * 60 * 1000),
-      resendAfter: new Date(now.getTime() + 60 * 1000),
-      attempts: 0,
-    };
-
     await EmailOTP.findOneAndUpdate(
       { email: normalizedEmail },
       {
-        $set: pendingData,
+        $set: {
+          fullName: fullName.trim(),
+          phone,
+          passwordHash: await bcrypt.hash(password, 10),
+          otpHash: hashOTP(otp),
+          expiresAt: new Date(now.getTime() + 5 * 60 * 1000),
+          resendAfter: new Date(now.getTime() + 60 * 1000),
+          attempts: 0,
+        },
         $setOnInsert: { email: normalizedEmail },
       },
       { upsert: true, new: true, runValidators: true }
@@ -139,14 +133,13 @@ router.post("/register", otpLimiter, async (req, res) => {
     });
   } catch (error) {
     console.error("Registration OTP error:", error.message);
-
     return res.status(500).json({
       message: "Could not send the verification code. Please try again.",
     });
   }
 });
 
-// VERIFY OTP: Create account only after successful verification
+// VERIFY REGISTRATION OTP
 router.post("/verify-otp", otpLimiter, async (req, res) => {
   try {
     const { email, otp } = req.body;
@@ -162,10 +155,7 @@ router.post("/verify-otp", otpLimiter, async (req, res) => {
     }
 
     const normalizedEmail = email.trim().toLowerCase();
-
-    const pending = await EmailOTP.findOne({
-      email: normalizedEmail,
-    });
+    const pending = await EmailOTP.findOne({ email: normalizedEmail });
 
     if (!pending) {
       return res.status(400).json({
@@ -190,17 +180,12 @@ router.post("/verify-otp", otpLimiter, async (req, res) => {
     if (hashOTP(otp) !== pending.otpHash) {
       pending.attempts += 1;
       await pending.save();
-
       return res.status(400).json({
         message: "Incorrect verification code.",
       });
     }
 
-    const existingUser = await User.findOne({
-      email: normalizedEmail,
-    });
-
-    if (existingUser) {
+    if (await User.findOne({ email: normalizedEmail })) {
       await EmailOTP.deleteOne({ _id: pending._id });
       return res.status(409).json({
         message: "An account with this email already exists. Please log in.",
@@ -222,14 +207,13 @@ router.post("/verify-otp", otpLimiter, async (req, res) => {
     });
   } catch (error) {
     console.error("OTP verification error:", error.message);
-
     return res.status(500).json({
       message: "Verification failed. Please try again.",
     });
   }
 });
 
-// RESEND OTP
+// RESEND REGISTRATION OTP
 router.post("/resend-otp", otpLimiter, async (req, res) => {
   try {
     const { email } = req.body;
@@ -241,10 +225,7 @@ router.post("/resend-otp", otpLimiter, async (req, res) => {
     }
 
     const normalizedEmail = email.trim().toLowerCase();
-
-    const pending = await EmailOTP.findOne({
-      email: normalizedEmail,
-    });
+    const pending = await EmailOTP.findOne({ email: normalizedEmail });
 
     if (!pending) {
       return res.status(404).json({
@@ -258,7 +239,6 @@ router.post("/resend-otp", otpLimiter, async (req, res) => {
       const seconds = Math.ceil(
         (pending.resendAfter.getTime() - now.getTime()) / 1000
       );
-
       return res.status(429).json({
         message: `Please wait ${seconds} seconds before requesting another code.`,
       });
@@ -270,7 +250,6 @@ router.post("/resend-otp", otpLimiter, async (req, res) => {
     pending.expiresAt = new Date(now.getTime() + 5 * 60 * 1000);
     pending.resendAfter = new Date(now.getTime() + 60 * 1000);
     pending.attempts = 0;
-
     await pending.save();
 
     try {
@@ -286,14 +265,206 @@ router.post("/resend-otp", otpLimiter, async (req, res) => {
     });
   } catch (error) {
     console.error("OTP resend error:", error.message);
-
     return res.status(500).json({
       message: "Could not resend the verification code. Please try again.",
     });
   }
 });
 
-// LOGIN: Existing functionality preserved
+// FORGOT PASSWORD: Send reset OTP
+router.post("/forgot-password", otpLimiter, async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (typeof email !== "string" || !email.trim()) {
+      return res.status(400).json({
+        message: "Please enter your registered email address.",
+      });
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+    const user = await User.findOne({ email: normalizedEmail });
+
+    if (!user) {
+      return res.status(200).json({
+        success: true,
+        message: "If an account exists for this email, a reset code will be sent.",
+      });
+    }
+
+    const now = new Date();
+    const existingReset = await PasswordReset.findOne({
+      email: normalizedEmail,
+    });
+
+    if (existingReset && existingReset.resendAfter > now) {
+      const seconds = Math.ceil(
+        (existingReset.resendAfter.getTime() - now.getTime()) / 1000
+      );
+      return res.status(429).json({
+        message: `Please wait ${seconds} seconds before requesting another code.`,
+      });
+    }
+
+    const otp = generateOTP();
+
+    await PasswordReset.findOneAndUpdate(
+      { email: normalizedEmail },
+      {
+        $set: {
+          otpHash: hashOTP(otp),
+          expiresAt: new Date(now.getTime() + 5 * 60 * 1000),
+          resendAfter: new Date(now.getTime() + 60 * 1000),
+          attempts: 0,
+          verifiedUntil: null,
+        },
+        $setOnInsert: { email: normalizedEmail },
+      },
+      { upsert: true, new: true, runValidators: true }
+    );
+
+    try {
+      await sendOTPEmail(
+        normalizedEmail,
+        user.fullName,
+        otp,
+        true
+      );
+    } catch (emailError) {
+      await PasswordReset.deleteOne({ email: normalizedEmail });
+      throw emailError;
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "If an account exists for this email, a reset code will be sent.",
+    });
+  } catch (error) {
+    console.error("Forgot password error:", error.message);
+    return res.status(500).json({
+      message: "Could not process the request. Please try again.",
+    });
+  }
+});
+
+// VERIFY PASSWORD RESET OTP
+router.post("/verify-reset-otp", otpLimiter, async (req, res) => {
+  try {
+    const { email, otp } = req.body;
+
+    if (
+      typeof email !== "string" ||
+      typeof otp !== "string" ||
+      !/^\d{6}$/.test(otp)
+    ) {
+      return res.status(400).json({
+        message: "Enter the valid 6-digit reset code.",
+      });
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+    const reset = await PasswordReset.findOne({
+      email: normalizedEmail,
+    });
+
+    if (!reset || reset.expiresAt <= new Date()) {
+      if (reset) {
+        await PasswordReset.deleteOne({ _id: reset._id });
+      }
+      return res.status(400).json({
+        message: "Reset code expired or unavailable. Request a new code.",
+      });
+    }
+
+    if (reset.attempts >= 5) {
+      await PasswordReset.deleteOne({ _id: reset._id });
+      return res.status(429).json({
+        message: "Too many incorrect attempts. Request a new code.",
+      });
+    }
+
+    if (hashOTP(otp) !== reset.otpHash) {
+      reset.attempts += 1;
+      await reset.save();
+      return res.status(400).json({
+        message: "Incorrect reset code.",
+      });
+    }
+
+    reset.verifiedUntil = new Date(Date.now() + 10 * 60 * 1000);
+    await reset.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Code verified. You can now reset your password.",
+    });
+  } catch (error) {
+    console.error("Reset OTP verification error:", error.message);
+    return res.status(500).json({
+      message: "Could not verify the reset code. Please try again.",
+    });
+  }
+});
+
+// RESET PASSWORD
+router.post("/reset-password", otpLimiter, async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    if (
+      typeof email !== "string" ||
+      !email.trim() ||
+      !validPassword(password)
+    ) {
+      return res.status(400).json({
+        message:
+          "Password must be at least 8 characters and include a letter, a number, and a special character.",
+      });
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+    const reset = await PasswordReset.findOne({
+      email: normalizedEmail,
+    });
+
+    if (
+      !reset ||
+      !reset.verifiedUntil ||
+      reset.verifiedUntil <= new Date() ||
+      reset.expiresAt <= new Date()
+    ) {
+      return res.status(403).json({
+        message: "Please verify a valid reset code before changing your password.",
+      });
+    }
+
+    const user = await User.findOne({ email: normalizedEmail });
+
+    if (!user) {
+      await PasswordReset.deleteOne({ _id: reset._id });
+      return res.status(400).json({
+        message: "Unable to reset this account. Please request a new code.",
+      });
+    }
+
+    user.password = await bcrypt.hash(password, 10);
+    await user.save();
+
+    await PasswordReset.deleteOne({ _id: reset._id });
+
+    return res.status(200).json({
+      success: true,
+      message: "Password reset successfully. Please log in with your new password.",
+    });
+  } catch (error) {
+    console.error("Password reset error:", error.message);
+    return res.status(500).json({
+      message: "Could not reset the password. Please try again.",
+    });
+  }
+});
+
+// LOGIN
 router.post("/login", async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -344,7 +515,6 @@ router.post("/login", async (req, res) => {
     });
   } catch (error) {
     console.error("Login error:", error.message);
-
     return res.status(500).json({
       message: "Login failed. Please try again.",
     });
